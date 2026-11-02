@@ -1,0 +1,280 @@
+You can install MySQL using Docker and make it available to applications running on your local computer or other computers on your LAN.
+
+Since you're already using Debian 13 with Docker and Docker Compose, I recommend installing MySQL using Docker Compose. This is easier to maintain than manually creating containers, especially when you eventually deploy Java Spring Boot applications.
+
+I'll explain how to install MySQL, configure persistent storage, expose its port, and connect your applications.
+
+## 1. Understand the architecture
+
+Your MySQL database runs inside a Docker container, but your applications can connect to it through the host computer's IP address and a published TCP port.
+
+The important concepts are:
+
+- MySQL image: Contains the MySQL server software.
+- MySQL container: Runs the database server.
+- Port mapping: Makes MySQL accessible outside Docker.
+- Docker volume: Keeps your database files even when the container is removed.
+
+## 2. Create a MySQL project directory
+
+On your Debian server, run:
+
+```
+mkdir -p ~/docker/mysql
+cd ~/docker/mysql
+```
+
+We'll put the Docker Compose configuration in this directory.
+
+## 3. Create the Docker Compose configuration
+
+First, create a `.env` file containing your database credentials:
+
+```
+nano .env
+```
+
+Add the following, replacing the example passwords with your own strong passwords:
+
+```
+MYSQL_ROOT_PASSWORD=replace_with_strong_root_password
+MYSQL_DATABASE=student_db
+MYSQL_USER=student_app
+MYSQL_PASSWORD=replace_with_strong_app_password
+```
+
+Save the file, then restrict access:
+
+```
+chmod 600 .env
+```
+
+Next, create `compose.yaml`:
+
+```
+nano compose.yaml
+```
+
+Paste this configuration:
+
+```
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: mysql-server
+    restart: unless-stopped
+
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      TZ: Asia/Shanghai
+
+    ports:
+      - "127.0.0.1:3306:3306"
+
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+
+volumes:
+  mysql_data:
+
+```
+
+I recommend MySQL 8.4, a long-term-support release, rather than using `latest`. The official image supports these initialization variables and persistent volumes.&#x20;
+
+[image](https://www.google.com/s2/favicons?domain=https://hub.docker.com\&sz=32)
+
+Docker Hub+1
+
+
+
+Important: The port binding `127.0.0.1:3306:3306` allows connections from applications running directly on your Debian server. It does not expose MySQL to other computers.
+
+If you want to connect from your Ubuntu laptop or another computer on your LAN, change it to:
+
+```
+ports:
+  - "3306:3306"
+```
+
+This exposes the port on all host interfaces, so restrict TCP port 3306 with your firewall to trusted LAN IP addresses only. Do not expose it to the public internet.
+
+## 4. Start MySQL
+
+Run:
+
+```
+docker compose up -d
+```
+
+Docker will download the MySQL image if necessary, create the volume, and start the database container.
+
+Check its status:
+
+```
+docker ps
+```
+
+Check startup logs:
+
+```
+docker logs -f mysql-server
+```
+
+The initial database creation may take some time. Wait until MySQL reports that it is ready for connections.
+
+## 5. Enter MySQL inside the container
+
+To open the MySQL command-line client:
+
+```
+docker exec -it mysql-server mysql -u root -p
+```
+
+Enter your root password when prompted.
+
+You should see:
+
+```
+mysql>
+```
+
+Now run some SQL commands:
+
+```
+SHOW DATABASES;
+
+USE student_db;
+
+CREATE TABLE students (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(100) NOT NULL,
+    age INT
+);
+
+INSERT INTO students (name, age)
+VALUES ('Alice', 20);
+
+SELECT * FROM students;
+```
+
+You should get a result similar to:
+
+```
++----+-------+------+
+| id | name  | age  |
++----+-------+------+
+|  1 | Alice |   20 |
++----+-------+------+
+```
+
+Exit MySQL:
+
+```
+exit;
+```
+
+## 6. Connect your local applications
+
+The connection address depends on where your application runs.
+
+| Application location        | MySQL host                                 | Port                         |
+| --------------------------- | ------------------------------------------ | ---------------------------- |
+| On Debian host              | `127.0.0.1`                                | 3306                         |
+| On another LAN computer     | Debian server's LAN IP                     | 3306                         |
+| In the same Compose project | `mysql`                                    | 3306                         |
+| In another Docker project   | Shared Docker network name or host address | Depends on connection method |
+
+For example, if your Debian server's LAN address is `192.168.1.114`, an Ubuntu application would use:
+
+```
+Host:     192.168.1.114
+Port:     3306
+Database: student_db
+Username: student_app
+Password: your_app_password
+```
+
+The `192.168.1.114` address is an example; verify your server's current address using:
+
+```
+hostname -I
+```
+
+### Connect from a Java Spring Boot application
+
+Since you're developing a Java student management system using Spring Boot and Hibernate, here is a practical `application.properties` example.
+
+```
+spring.datasource.url=jdbc:mysql://192.168.1.114:3306/student_db
+spring.datasource.username=student_app
+spring.datasource.password=${DB_PASSWORD}
+
+spring.jpa.hibernate.ddl-auto=update
+spring.jpa.show-sql=true
+spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.MySQLDialect
+```
+
+Set `DB_PASSWORD` in your application's environment to the password you chose for `MYSQL_PASSWORD`.
+
+You'll also need the MySQL JDBC driver dependency in Maven:
+
+```
+<dependency>
+    <groupId>com.mysql</groupId>
+    <artifactId>mysql-connector-j</artifactId>
+    <scope>runtime</scope>
+</dependency>
+```
+
+For local development, `ddl-auto=update` can be convenient. For production, use database migrations such as Flyway or Liquibase instead.
+
+## 7. Manage your MySQL container
+
+These are the Docker commands you'll use frequently:
+
+| Task                  | Command                                         |
+| --------------------- | ----------------------------------------------- |
+| Check status          | `docker ps -a`                                  |
+| Stop MySQL            | `docker stop mysql-server`                      |
+| Start MySQL           | `docker start mysql-server`                     |
+| Restart MySQL         | `docker restart mysql-server`                   |
+| View logs             | `docker logs mysql-server`                      |
+| Enter container shell | `docker exec -it mysql-server bash`             |
+| Enter MySQL client    | `docker exec -it mysql-server mysql -u root -p` |
+
+The database is stored in the `mysql_data` Docker volume. It survives normal container restarts and recreation. Avoid `docker compose down -v` because it removes the volume and its data. Also back up the database regularly.
+
+Note that `.env` initialization values only apply when the database is first created. Changing a password in `.env` later does not change the existing MySQL user's password.&#x20;
+
+[image](https://www.google.com/s2/favicons?domain=https://hub.docker.com\&sz=32)
+
+Docker Hub
+
+
+
+## 8. A consideration for your existing WordPress installation
+
+You previously configured WordPress and MySQL with Docker Compose. If that MySQL container is still running, you may not need to install another one.
+
+You have two options:
+
+- Reuse the existing MySQL server: Create a separate database and user for your Java application.
+- Run a second MySQL server: Use another host port, such as `3307:3306`, and a separate data volume.
+
+Because your Debian server has relatively old hardware, reusing one MySQL instance for multiple small applications may conserve memory.
+
+## My recommendation
+
+For your Debian server, I would use one MySQL 8.4 container with persistent storage and separate database users for WordPress and your Java applications.
+
+One question before we continue: Is your goal to connect MySQL from applications running on the Debian server itself, or from your Ubuntu/Windows computers over the local network?
+
+That determines the best Docker networking and firewall configuration.
